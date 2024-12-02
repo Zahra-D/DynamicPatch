@@ -70,13 +70,13 @@ class DynamicPatchEmbed(nn.Module):
         # print(self.device)
         
         B = x.shape[0]
-        # size_scores = (self.img_size//self.smp).int()
-        # num_levels = torch.log(self.mnp, self.mnp, 2)
+
+
+        #this store the score for all the passible patches ((batch, 5, 16, 16))
         dividing_scores = torch.zeros((B,self.num_level+1, self.mnp, self.mnp)).to(self.device)
         
-        # print('dividing score shpae', dividing_scores.shape)
-        
-        # y = self.conv112(x)
+
+        #"Since the shape of each level is 16x16 (corresponding to patch size of 14), scores for larger patches(28, 56, 112) are repeated to fill all their corresponding sub-patches of size 14."
         dividing_scores[:,0] = self.activation(self.conv112(x)).squeeze(dim=1).repeat_interleave(2**(self.num_level-1), dim=1).repeat_interleave(2**(self.num_level-1), dim=2) +1e-8
        
         dividing_scores[:,1] = self.activation(self.conv56(x)).squeeze(dim=1).repeat_interleave(2**(self.num_level-2), dim=1).repeat_interleave(2**(self.num_level-2), dim=2) +1e-8
@@ -215,6 +215,8 @@ class DynamicPatchEmbed(nn.Module):
         #shows the available options to break 
         mask_current_options = torch.zeros((B,self.num_patches + max_iter)).int().to(self.device)  
         
+        
+
         x_p = torch.zeros((B)).int().to(self.device)
         y_p = torch.zeros((B)).int().to(self.device)
         width_p = self.img_size * torch.ones((B)).int().to(self.device)
@@ -227,6 +229,7 @@ class DynamicPatchEmbed(nn.Module):
         mask_current_options[:,0] = 1
 
    
+        #showing the first empty space in scores 
         i = 1
         
         
@@ -239,14 +242,20 @@ class DynamicPatchEmbed(nn.Module):
             #since it is going to break, it is no more available
             mask_current_options[torch.arange(B), max_indx] = 0
             
+            
+            #get the info of selected patch
             x_p = scores[:,1].gather(  -1, max_indx.unsqueeze(1)).squeeze().int()
             y_p = scores[:,2].gather(-1, max_indx.unsqueeze(1)).squeeze().int()
             width_p = scores[:,3].gather(-1, max_indx.unsqueeze(1)).squeeze().int()
+            
+            #the width of resutling patches
             width_c = width_p//2
             
         
-            
+            #getting the flatten index of the resulting sub patches
             sub_patches_scores_indeces = self.calculating_flatten_index_children(x_p, y_p, width_p)
+            
+            #addeing the info of resuling sub-patches
             scores[:, 0,i:i+4] = decision_scores.view(B,-1)[torch.arange(B).unsqueeze(1), sub_patches_scores_indeces]
             scores[:, 1,i:i+4] = torch.stack([x_p, x_p + width_c, x_p, x_p + width_c], dim=-1)
             scores[:, 2,i:i+4] = torch.stack([y_p, y_p, y_p + width_c, y_p + width_c], dim=-1)
@@ -254,13 +263,14 @@ class DynamicPatchEmbed(nn.Module):
             
             #since patches with size 7 are atomic we do not consider them as available options
             mask = width_c != (self.sps //2)
-            #update the options with new broken patches
+            
+            #update the available options with the new sub-patches
             mask_current_options[:,i:i+4] = mask.unsqueeze(1).repeat_interleave(4,dim=-1)
             i += 4 # 4 new patches are added to scores
             
 
 
-        mask_current_options[scores[:,3] == self.sps//2] = 1    
+        mask_current_options[scores[:,3] == self.sps//2] = 1    #this will show all the selected patches
         
         expanded_mask = mask_current_options.unsqueeze(1)
         selected_patches = torch.masked_select(scores[:,1:], expanded_mask.bool())
